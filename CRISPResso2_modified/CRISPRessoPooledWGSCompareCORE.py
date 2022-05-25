@@ -9,9 +9,9 @@ import argparse
 from copy import deepcopy
 import os
 import sys
-from CRISPResso2 import CRISPRessoShared
-from CRISPResso2 import CRISPRessoMultiProcessing
-from CRISPResso2 import CRISPRessoReport
+from CRISPResso2_modified import CRISPRessoShared
+from CRISPResso2_modified import CRISPRessoMultiProcessing
+from CRISPResso2_modified import CRISPRessoReport
 import traceback
 
 

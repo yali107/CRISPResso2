@@ -1,4 +1,4 @@
-from CRISPResso2 import CRISPRessoCOREResources
+from CRISPResso2_modified import CRISPRessoCOREResources
 
 def test_find_indels_substitutions():
     # no insertion or deletion

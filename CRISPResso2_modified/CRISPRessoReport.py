@@ -10,7 +10,7 @@ from jinja2 import Environment, FileSystemLoader
 import shutil
 import pandas as pd
 import re
-from CRISPResso2 import CRISPRessoShared
+from CRISPResso2_modified import CRISPRessoShared
 
 def make_report_from_folder(crispresso_report_file, crispresso_folder, _ROOT):
     """

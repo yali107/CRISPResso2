@@ -1,6 +1,6 @@
 """Unit tests for CRISPResso2Align."""
 
-from CRISPResso2 import CRISPResso2Align
+from CRISPResso2_modified import CRISPResso2Align
 import numpy as np
 
 ALN_MATRIX = CRISPResso2Align.read_matrix('./CRISPResso2/EDNAFULL')

@@ -1,4 +1,4 @@
-from CRISPResso2 import CRISPResso2Align, CRISPRessoShared
+from CRISPResso2_modified import CRISPResso2Align, CRISPRessoShared
 
 ALN_MATRIX = CRISPResso2Align.read_matrix('./CRISPResso2/EDNAFULL')
 

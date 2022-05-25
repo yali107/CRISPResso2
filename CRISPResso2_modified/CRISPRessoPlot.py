@@ -19,7 +19,7 @@ import re
 from matplotlib import colors as colors_mpl
 import seaborn as sns
 
-from CRISPResso2 import CRISPRessoShared
+from CRISPResso2_modified import CRISPRessoShared
 
 def setMatplotlibDefaults():
     font = {'size': 22}

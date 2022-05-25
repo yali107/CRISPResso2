@@ -17,10 +17,10 @@ import subprocess as sb
 import sys
 import traceback
 import unicodedata
-from CRISPResso2 import CRISPRessoShared
-from CRISPResso2 import CRISPRessoMultiProcessing
-from CRISPResso2 import CRISPRessoReport
-from CRISPResso2 import CRISPRessoPlot
+from CRISPResso2_modified import CRISPRessoShared
+from CRISPResso2_modified import CRISPRessoMultiProcessing
+from CRISPResso2_modified import CRISPRessoReport
+from CRISPResso2_modified import CRISPRessoPlot
 
 
 import logging

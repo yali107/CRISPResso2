@@ -20,9 +20,9 @@ import subprocess as sb
 import unicodedata
 from math import floor, sqrt
 
-from CRISPResso2 import CRISPResso2Align
-from CRISPResso2 import CRISPRessoCOREResources
-from CRISPResso2.CRISPRessoMultiProcessing import get_max_processes
+from CRISPResso2_modified import CRISPResso2Align
+from CRISPResso2_modified import CRISPRessoCOREResources
+from CRISPResso2_modified.CRISPRessoMultiProcessing import get_max_processes
 
 
 __version__ = "2.2.7"

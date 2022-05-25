@@ -10,10 +10,10 @@ from copy import deepcopy
 import sys
 import traceback
 from datetime import datetime
-from CRISPResso2 import CRISPRessoShared
-from CRISPResso2 import CRISPRessoPlot
-from CRISPResso2 import CRISPRessoMultiProcessing
-from CRISPResso2 import CRISPRessoReport
+from CRISPResso2_modified import CRISPRessoShared
+from CRISPResso2_modified import CRISPRessoPlot
+from CRISPResso2_modified import CRISPRessoMultiProcessing
+from CRISPResso2_modified import CRISPRessoReport
 
 import logging
 logging.basicConfig(

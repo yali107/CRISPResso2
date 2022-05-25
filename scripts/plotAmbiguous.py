@@ -9,8 +9,8 @@ import os
 import numpy as np
 import pandas as pd
 import zipfile
-from CRISPResso2 import CRISPRessoPlot
-from CRISPResso2 import CRISPRessoShared
+from CRISPResso2_modified import CRISPRessoPlot
+from CRISPResso2_modified import CRISPRessoShared
 
 def main():
     parser = argparse.ArgumentParser(description="Plot ambiguous reads")

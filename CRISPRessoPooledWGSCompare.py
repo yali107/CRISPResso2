@@ -7,7 +7,7 @@ Software pipeline for the analysis of genome editing outcomes from deep sequenci
 '''
 
 
-from CRISPResso2.CRISPRessoPooledWGSCompareCORE import main
+from CRISPResso2_modified.CRISPRessoPooledWGSCompareCORE import main
 
 
 if __name__ == '__main__':
