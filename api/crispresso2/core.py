@@ -2,22 +2,26 @@ from collections import defaultdict
 from copy import deepcopy
 from concurrent.futures import ProcessPoolExecutor, wait
 from datetime import datetime
-import gzip
 import json
 import zipfile
 import os
 import re
 import subprocess as sb
-import traceback
 
 import sys
 sys.path.append(r'/Users/alexli/Personal/CRISPResso2/CRISPResso2_modified')
 
-from api import RESOURCE_DIR
-from api.alignment import alignment
-from api.utils.multi_processing import get_max_processes
-from CRISPResso2_modified.CRISPRessoShared import getCRISPRessoArgParser
+import numpy as np
 
+from api import RESOURCE_DIR, __version__
+from api.alignment import alignment
+from api.utils.logger import logger
+from api.utils.multi_processing import get_max_processes
+from api.utils.shared import (
+    slugify, load_crispresso_info, set_guide_array, find_wrong_nt, guess_amplicons, guess_guides, reverse_complement,
+    global_align
+)
+from CRISPResso2_modified.CRISPRessoShared import getCRISPRessoArgParser
 
 
 def main(args):
@@ -38,32 +42,34 @@ def main(args):
         else:
             n_processes = int(args.n_processes)
 
-        # check files and get output name
-        if args.fastq_r1:
-            CRISPRessoShared.check_file(args.fastq_r1)
-            if args.fastq_r2:
-                CRISPRessoShared.check_file(args.fastq_r2)
-        elif args.bam_input:
-            CRISPRessoShared.check_file(args.bam_input)
-        else:
-            arg_parser.print_help()
-            raise CRISPRessoShared.BadParameterException(
-                'Please provide input data for analysis e.g. using the --fastq_r1 parameter.')
+        # todo: move to a specific check files module
+        # # check files and get output name
+        # if args.fastq_r1:
+        #     CRISPRessoShared.check_file(args.fastq_r1)
+        #     if args.fastq_r2:
+        #         CRISPRessoShared.check_file(args.fastq_r2)
+        # elif args.bam_input:
+        #     CRISPRessoShared.check_file(args.bam_input)
+        # else:
+        #     arg_parser.print_help()
+        #     raise Exception(
+        #         'Please provide input data for analysis e.g. using the --fastq_r1 parameter.')
 
-        if args.assign_ambiguous_alignments_to_first_reference and args.expand_ambiguous_alignments:
-            arg_parser.print_help()
-            raise CRISPRessoShared.BadParameterException(
-                'The options --assign_ambiguous_alignments_to_first_reference and --expand_ambiguous_alignments are mutually exclusive and cannot be both set.')
-
-        if args.amplicon_seq is None and args.auto is False:
-            arg_parser.print_help()
-            raise CRISPRessoShared.BadParameterException(
-                'Please provide an amplicon sequence for analysis using the --amplicon_seq parameter.')
-
-        if (args.needleman_wunsch_gap_open > 0):
-            raise CRISPRessoShared.BadParameterException("Needleman Wunsch gap open penalty must be <= 0")
-        if (args.needleman_wunsch_gap_extend > 0):
-            raise CRISPRessoShared.BadParameterException("Needleman Wunsch gap extend penalty must be <= 0")
+        # todo: move to specific logic checking raise exception
+        # if args.assign_ambiguous_alignments_to_first_reference and args.expand_ambiguous_alignments:
+        #     arg_parser.print_help()
+        #     raise Exception(
+        #         'The options --assign_ambiguous_alignments_to_first_reference and --expand_ambiguous_alignments are mutually exclusive and cannot be both set.')
+        #
+        # if args.amplicon_seq is None and args.auto is False:
+        #     arg_parser.print_help()
+        #     raise Exception(
+        #         'Please provide an amplicon sequence for analysis using the --amplicon_seq parameter.')
+        #
+        # if (args.needleman_wunsch_gap_open > 0):
+        #     raise Exception("Needleman Wunsch gap open penalty must be <= 0")
+        # if (args.needleman_wunsch_gap_extend > 0):
+        #     raise Exception("Needleman Wunsch gap extend penalty must be <= 0")
 
         # create output directory
         get_name_from_fasta = lambda x: os.path.basename(x).replace('.fastq', '').replace('.gz', '').replace('.fq', '')
@@ -78,15 +84,15 @@ def main(args):
             elif args.bam_input != '':
                 database_id = '%s' % get_name_from_bam(args.bam_input)
         else:
-            clean_name = CRISPRessoShared.slugify(args.name)
+            clean_name = slugify(args.name)
             if args.name != clean_name:
-                warn('The specified name %s contained invalid characters and was changed to: %s' % (
+                logger.warn('The specified name %s contained invalid characters and was changed to: %s' % (
                     args.name, clean_name))
             database_id = clean_name
 
         clean_file_prefix = ""
         if args.file_prefix != "":
-            clean_file_prefix = CRISPRessoShared.slugify(args.file_prefix)
+            clean_file_prefix = slugify(args.file_prefix)
             if not clean_file_prefix.endswith("."):
                 clean_file_prefix += "."
 
@@ -101,7 +107,7 @@ def main(args):
         crispresso2_info_file = os.path.join(OUTPUT_DIRECTORY, 'CRISPResso2_info.json')
         crispresso2_info = {'running_info': {}, 'results': {'alignment_stats': {},
                                                             'general_plots': {}}}  # keep track of all information for this run to be pickled and saved at the end of the run
-        crispresso2_info['running_info']['version'] = CRISPRessoShared.__version__
+        crispresso2_info['running_info']['version'] = api.__version__
         crispresso2_info['running_info']['args'] = deepcopy(args)
 
         log_filename = _jp('CRISPResso_RUNNING_LOG.txt')
@@ -123,43 +129,43 @@ def main(args):
 
         try:
             os.makedirs(OUTPUT_DIRECTORY)
-            info('Creating Folder %s' % OUTPUT_DIRECTORY)
+            logger.info('Creating Folder %s' % OUTPUT_DIRECTORY)
         #            info('Done!') #crispresso2 doesn't announce that the folder is created... save some electricity here
         except:
-            warn('Folder %s already exists.' % OUTPUT_DIRECTORY)
+            logger.warn('Folder %s already exists.' % OUTPUT_DIRECTORY)
 
         finally:
-            logger.addHandler(logging.FileHandler(log_filename))
+            # logger.addHandler(logging.FileHandler(log_filename))
 
             with open(log_filename, 'w+') as outfile:
                 outfile.write('CRISPResso version %s\n[Command used]:\n%s\n\n[Execution log]:\n' % (
-                    CRISPRessoShared.__version__, crispresso_cmd_to_write))
+                    api.__version__, crispresso_cmd_to_write))
 
         files_to_remove = []  # these files will be deleted at the end of the run
 
         if args.no_rerun:
             if os.path.exists(crispresso2_info_file):
-                previous_run_data = CRISPRessoShared.load_crispresso_info(OUTPUT_DIRECTORY)
-                if previous_run_data['running_info']['version'] == CRISPRessoShared.__version__:
+                previous_run_data = load_crispresso_info(OUTPUT_DIRECTORY)
+                if previous_run_data['running_info']['version'] == api.__version__:
                     args_are_same = True
                     for arg in vars(args):
                         if arg == "no_rerun":
                             continue
                         if arg not in vars(previous_run_data['running_info']['args']):
-                            info('Comparing current run to previous run: old run had argument ' + str(
+                            logger.info('Comparing current run to previous run: old run had argument ' + str(
                                 arg) + ' \nRerunning.')
                             args_are_same = False
                         elif str(getattr(previous_run_data['running_info']['args'], arg)) != str(getattr(args, arg)):
-                            info('Comparing current run to previous run:\n\told argument ' + str(arg) + ' = ' + str(
+                            logger.info('Comparing current run to previous run:\n\told argument ' + str(arg) + ' = ' + str(
                                 getattr(previous_run_data['running_info']['args'], arg)) + '\n\tnew argument: ' + str(
                                 arg) + ' = ' + str(getattr(args, arg)) + '\nRerunning.')
                             args_are_same = False
 
                     if args_are_same:
-                        info('Analysis already completed on %s!' % previous_run_data['running_info']['end_time_string'])
+                        logger.info('Analysis already completed on %s!' % previous_run_data['running_info']['end_time_string'])
                         sys.exit(0)
                 else:
-                    info(
+                    logger.info(
                         'The no_rerun flag is set, but this analysis will be rerun because the existing run was performed using an old version of CRISPResso (' + str(
                             previous_run_data['running_info']['version']) + ').')
 
@@ -171,11 +177,11 @@ def main(args):
         if args.bam_input:
             if args.bam_chr_loc != "":  # we only need an index if we're accessing specific positions later
                 if os.path.exists(rreplace(args.bam_input, ".bam", ".bai")):
-                    info('Index file for input .bam file exists, skipping generation.')
+                    logger.info('Index file for input .bam file exists, skipping generation.')
                 elif os.path.exists(args.bam_input + '.bai'):
-                    info('Index file for input .bam file exists, skipping generation.')
+                    logger.info('Index file for input .bam file exists, skipping generation.')
                 else:
-                    info('Creating index file for input .bam file...')
+                    logger.info('Creating index file for input .bam file...')
                     bam_input_file = _jp(os.path.basename(args.bam_input)) + ".sorted.bam"
                     sb.call('samtools sort -o ' + bam_input_file + ' ' + args.bam_input, shell=True)
                     sb.call('samtools index %s ' % (bam_input_file), shell=True)
@@ -189,13 +195,13 @@ def main(args):
             files_to_remove.append(output_sam)
 
             if args.fastq_output:
-                raise CRISPRessoShared.BadParameterException(
+                raise Exception(
                     'bam_input is not compatable with fastq_output! Please either use bam_input or fastq_output.')
 
         if args.fastq_output:
             fastq_output = _jp('CRISPResso_output.fastq.gz')
             crispresso2_info['fastq_output'] = fastq_output
-            info('Writing fastq output file: ' + fastq_output)
+            logger.info('Writing fastq output file: ' + fastq_output)
 
         #### ASSERT GUIDE(S)
         guides = []
@@ -203,7 +209,7 @@ def main(args):
             for current_guide_seq in args.guide_seq.split(','):
                 wrong_nt = CRISPRessoShared.find_wrong_nt(current_guide_seq)
                 if wrong_nt:
-                    raise CRISPRessoShared.NTException(
+                    raise Exception(
                         'The sgRNA sequence contains bad characters:%s' % ' '.join(wrong_nt))
                 guides.append(current_guide_seq)
 
@@ -212,16 +218,16 @@ def main(args):
         if args.guide_name:
             guide_name_arr = args.guide_name.split(",")
             if len(guide_name_arr) > len(guides):
-                raise CRISPRessoShared.BadParameterException(
+                raise Exception(
                     "More guide names were given than guides. Guides: %d Guide names: %d" % (
                         len(guides), len(guide_name_arr)))
             for idx, guide_name in enumerate(guide_name_arr):
                 if guide_name != "":
                     guide_names[idx] = guide_name
 
-        guide_qw_centers = CRISPRessoShared.set_guide_array(args.quantification_window_center, guides,
+        guide_qw_centers = set_guide_array(args.quantification_window_center, guides,
                                                             'guide quantification center')
-        guide_qw_sizes = CRISPRessoShared.set_guide_array(args.quantification_window_size, guides,
+        guide_qw_sizes = set_guide_array(args.quantification_window_size, guides,
                                                           'guide quantification size')
 
         guide_plot_cut_points = [True] * len(
@@ -235,9 +241,9 @@ def main(args):
         if args.coding_seq:
             for exon_seq in args.coding_seq.strip().upper().split(','):
                 # check for wrong NT
-                wrong_nt = CRISPRessoShared.find_wrong_nt(exon_seq)
+                wrong_nt = find_wrong_nt(exon_seq)
                 if wrong_nt:
-                    raise CRISPRessoShared.NTException(
+                    raise Exception(
                         'The coding sequence contains bad characters:%s' % ' '.join(wrong_nt))
 
                 coding_seqs.append(exon_seq)
@@ -273,7 +279,7 @@ def main(args):
                         number_of_reads_to_consider + 100) + ' | samtools bam2fq -  2> /dev/null > ' + auto_fastq_r1,
                             shell=True)
 
-            amplicon_seq_arr = CRISPRessoShared.guess_amplicons(auto_fastq_r1, auto_fastq_r2,
+            amplicon_seq_arr = guess_amplicons(auto_fastq_r1, auto_fastq_r2,
                                                                 number_of_reads_to_consider, args.flash_command,
                                                                 args.max_paired_end_reads_overlap,
                                                                 args.min_paired_end_reads_overlap,
@@ -295,7 +301,7 @@ def main(args):
 
             if len(guides) == 0:
                 for amplicon_seq in amplicon_seq_arr:
-                    (potential_guide, is_base_editor) = CRISPRessoShared.guess_guides(amplicon_seq, auto_fastq_r1,
+                    (potential_guide, is_base_editor) = guess_guides(amplicon_seq, auto_fastq_r1,
                                                                                       auto_fastq_r2,
                                                                                       number_of_reads_to_consider,
                                                                                       args.flash_command,
@@ -315,20 +321,20 @@ def main(args):
             plural_string = ""
             if len(amplicon_seq_arr) > 1:
                 plural_string = "s"
-            info("Auto-detected %d reference amplicon%s" % (len(amplicon_seq_arr), plural_string))
+            logger.info("Auto-detected %d reference amplicon%s" % (len(amplicon_seq_arr), plural_string))
 
             if args.debug:
                 for idx, seq in enumerate(amplicon_seq_arr):
-                    info('Detected amplicon ' + str(idx) + ":" + str(seq))
+                    logger.info('Detected amplicon ' + str(idx) + ":" + str(seq))
 
             if len(guides) > 1:
                 plural_string = "s"
-            info("Auto-detected %d guide%s" % (len(guides), plural_string))
+            logger.info("Auto-detected %d guide%s" % (len(guides), plural_string))
             if args.debug:
                 for idx, seq in enumerate(guides):
-                    info('Detected guide ' + str(idx) + ":" + str(seq))
+                    logger.info('Detected guide ' + str(idx) + ":" + str(seq))
             if amplicon_seq_arr == 0:
-                raise CRISPRessoShared.BadParameterException(
+                raise Exception(
                     "Cannot automatically infer amplicon sequence.",
                 )
 
@@ -340,7 +346,7 @@ def main(args):
 
             for idx, amp_seq in enumerate(amplicon_seq_arr):
                 if len(amp_seq) == 0:
-                    raise CRISPRessoShared.BadParameterException(
+                    raise Exception(
                         "Amplicon {0} has length 0. Please check the --amplicon_seq parameter.".format(
                             idx + 1,
                             ),
@@ -373,43 +379,43 @@ def main(args):
             #            if args.amplicon_name_arr eq "": #considering changing the name of the default amplicon from 'Reference' to 'Unedited'
             #                amplicon_name_arr[0] = 'Unedited'
             extension_seq_dna_top_strand = args.prime_editing_pegRNA_extension_seq.upper().replace('U', 'T')
-            wrong_nt = CRISPRessoShared.find_wrong_nt(extension_seq_dna_top_strand)
+            wrong_nt = find_wrong_nt(extension_seq_dna_top_strand)
             if wrong_nt:
-                raise CRISPRessoShared.NTException(
+                raise Exception(
                     'The prime editing pegRNA extension sequence contains bad characters:%s' % ' '.join(wrong_nt))
-            prime_editing_extension_seq_dna = CRISPRessoShared.reverse_complement(extension_seq_dna_top_strand)
+            prime_editing_extension_seq_dna = reverse_complement(extension_seq_dna_top_strand)
 
             # check to make sure the pegRNA spacer seq is in the RTT/extension seq
             # this is critical because we need to know where to check for scaffold incorporation. The pegRNA spacer should be FW and the RTT/extension should RC compared to the reference
             # If down the road we want users to be able to give this flexibly, we need to update the scaffold incorporation search in get_new_variant_object as well as in the definition of the quant window
             if args.prime_editing_pegRNA_spacer_seq == "":
-                raise CRISPRessoShared.BadParameterException(
+                raise Exception(
                     'The prime editing pegRNA spacer sequence (--prime_editing_pegRNA_spacer_seq) is required for prime editing analysis.')
             pegRNA_spacer_seq = args.prime_editing_pegRNA_spacer_seq.upper().replace('U', 'T')
 
             # check that the pegRNA aligns to the reference (and not the RC)
             amp_incentive = np.zeros(len(amplicon_seq_arr[0]) + 1, dtype=int)
-            f1, f2, fw_score = CRISPResso2Align.global_align(pegRNA_spacer_seq, amplicon_seq_arr[0].upper(),
+            f1, f2, fw_score = global_align(pegRNA_spacer_seq, amplicon_seq_arr[0].upper(),
                                                              matrix=aln_matrix, gap_incentive=amp_incentive,
                                                              gap_open=args.needleman_wunsch_gap_open,
                                                              gap_extend=args.needleman_wunsch_gap_extend, )
-            r1, r2, rv_score = CRISPResso2Align.global_align(pegRNA_spacer_seq, CRISPRessoShared.reverse_complement(
+            r1, r2, rv_score = global_align(pegRNA_spacer_seq, reverse_complement(
                 amplicon_seq_arr[0].upper()), matrix=aln_matrix, gap_incentive=amp_incentive,
                                                              gap_open=args.needleman_wunsch_gap_open,
                                                              gap_extend=args.needleman_wunsch_gap_extend, )
             if rv_score > fw_score:
-                raise CRISPRessoShared.BadParameterException(
+                raise Exception(
                     'The prime editing pegRNA spacer sequence appears to be given in the 3\'->5\' order. The prime editing pegRNA spacer sequence (--prime_editing_pegRNA_spacer_seq) must be given in the RNA 5\'->3\' order.')
 
             ref_incentive = np.zeros(len(prime_editing_extension_seq_dna) + 1, dtype=int)
-            f1, f2, fw_score = CRISPResso2Align.global_align(pegRNA_spacer_seq, prime_editing_extension_seq_dna,
+            f1, f2, fw_score = global_align(pegRNA_spacer_seq, prime_editing_extension_seq_dna,
                                                              matrix=aln_matrix, gap_incentive=ref_incentive,
                                                              gap_open=args.needleman_wunsch_gap_open, gap_extend=0, )
-            r1, r2, rv_score = CRISPResso2Align.global_align(pegRNA_spacer_seq, extension_seq_dna_top_strand,
+            r1, r2, rv_score = global_align(pegRNA_spacer_seq, extension_seq_dna_top_strand,
                                                              matrix=aln_matrix, gap_incentive=ref_incentive,
                                                              gap_open=args.needleman_wunsch_gap_open, gap_extend=0, )
             if rv_score > fw_score:
-                raise CRISPRessoShared.BadParameterException(
+                raise Exception(
                     "The pegRNA spacer aligns to the pegRNA extension sequence in 3'->5' direction. The prime editing pegRNA spacer sequence (--prime_editing_pegRNA_spacer_seq) must be given in the RNA 5'->3' order, and the pegRNA extension sequence (--prime_editing_pegRNA_extension_seq) must be given in the 5'->3' order. In other words, the pegRNA spacer sequence should be found in the given reference sequence, and the reverse complement of the pegRNA extension sequence should be found in the reference sequence.")
 
             # setting refs['Prime-edited']['sequence']
@@ -428,15 +434,15 @@ def main(args):
                 new_ref = args.prime_editing_override_prime_edited_ref_seq
                 if args.prime_editing_pegRNA_extension_seq not in new_ref and CRISPRessoShared.reverse_complement(
                     args.prime_editing_pegRNA_extension_seq) not in new_ref:
-                    raise CRISPRessoShared.BadParameterException(
+                    raise Exception(
                         'The provided extension sequence is not in the prime edited override reference sequence!')
 
             if new_ref in amplicon_seq_arr:
-                raise CRISPRessoShared.BadParameterException(
+                raise Exception(
                     'The calculated prime-edited amplicon is the same as the reference sequence.')
             amplicon_seq_arr.append(new_ref)
             if 'Prime-edited' in amplicon_name_arr:
-                raise CRISPRessoShared.BadParameterException("An amplicon named 'Prime-edited' must not be provided.")
+                raise Exception("An amplicon named 'Prime-edited' must not be provided.")
             amplicon_name_arr.append('Prime-edited')
             amplicon_quant_window_coordinates_arr.append('')
             prime_editing_edited_amp_seq = new_ref
@@ -444,10 +450,10 @@ def main(args):
         # finished prime editing bit
 
         for idx, this_seq in enumerate(amplicon_seq_arr):
-            wrong_nt = CRISPRessoShared.find_wrong_nt(this_seq)
+            wrong_nt = find_wrong_nt(this_seq)
             if wrong_nt:
                 this_name = amplicon_name_arr[idx]
-                raise CRISPRessoShared.NTException(
+                raise Exception(
                     'Reference amplicon sequence %d (%s) contains invalid characters: %s' % (
                         idx, this_name, ' '.join(wrong_nt)))
 
@@ -525,16 +531,16 @@ def main(args):
 
             # now handle the pegRNA spacer seq
             if args.prime_editing_pegRNA_spacer_seq == "":
-                raise CRISPRessoShared.BadParameterException(
+                raise Exception(
                     'The prime editing pegRNA spacer sequence (--prime_editing_pegRNA_spacer_seq) is required for prime editing analysis.')
             pegRNA_spacer_seq = args.prime_editing_pegRNA_spacer_seq.upper().replace('U', 'T')
             wrong_nt = CRISPRessoShared.find_wrong_nt(pegRNA_spacer_seq)
             if wrong_nt:
-                raise CRISPRessoShared.NTException(
+                raise Exception(
                     'The prime editing pegRNA spacer sgRNA sequence contains bad characters:%s' % ' '.join(wrong_nt))
             if pegRNA_spacer_seq not in amplicon_seq_arr[0] and CRISPRessoShared.reverse_complement(
                 pegRNA_spacer_seq) not in amplicon_seq_arr[0]:
-                raise CRISPRessoShared.BadParameterException(
+                raise Exception(
                     'The given prime editing pegRNA spacer is not found in the reference sequence')
 
             # spacer is found in the first amplicon (unmodified ref), may be modified in the other amplicons
@@ -587,7 +593,7 @@ def main(args):
                 nicking_guide_seq = args.prime_editing_nicking_guide_seq.upper().replace('U', 'T')
                 wrong_nt = CRISPRessoShared.find_wrong_nt(nicking_guide_seq)
                 if wrong_nt:
-                    raise CRISPRessoShared.NTException(
+                    raise Exception(
                         'The prime editing nicking sgRNA sequence contains bad characters:%s' % ' '.join(wrong_nt))
 
                 # nicking guide is found in the reverse_complement of the first amplicon, may be modified in the other amplicons
@@ -1117,7 +1123,7 @@ def main(args):
             N_READS_INPUT = get_n_reads_bam(args.bam_input, args.bam_chr_loc)
 
         if N_READS_INPUT == 0:
-            raise CRISPRessoShared.BadParameterException('The input contains 0 reads.')
+            raise Exception('The input contains 0 reads.')
 
         args_string_arr = []
         clean_args_string_arr = []
@@ -1138,7 +1144,7 @@ def main(args):
 
         if args.split_interleaved_input:
             if args.fastq_r2 != '' or args.bam_input != '':
-                raise CRISPRessoShared.BadParameterException(
+                raise Exception(
                     'The option --split_interleaved_input is available only when a single fastq file is specified!')
             else:
                 info('Splitting paired end single fastq file into two files...')
@@ -1156,7 +1162,7 @@ def main(args):
 
         if args.min_average_read_quality > 0 or args.min_single_bp_quality > 0 or args.min_bp_quality_or_N > 0:
             if args.bam_input != '':
-                raise CRISPRessoShared.BadParameterException(
+                raise Exception(
                     'The read filtering options are not available with bam input')
             info(
                 'Filtering reads with average bp quality < %d and single bp quality < %d and replacing bases with quality < %d with N ...' % (
@@ -1204,7 +1210,7 @@ def main(args):
 
         # Trim and merge reads
         if args.bam_input != '' and args.trim_sequences:
-            raise CRISPRessoShared.BadParameterException('Read trimming options are not available with bam input')
+            raise Exception('Read trimming options are not available with bam input')
         elif args.fastq_r1 != '' and args.fastq_r2 == '':  # single end reads
             if not args.trim_sequences:  # no trimming or merging required
                 output_forward_filename = args.fastq_r1
@@ -4245,7 +4251,7 @@ def main(args):
 
         return crispresso2_info
 
-    except CRISPRessoShared.NTException as e:
+    except Exception as e:
         print_stacktrace_if_debug()
         error('Alphabet error, please check your input.\n\nERROR: %s' % e)
         sys.exit(1)
@@ -4261,7 +4267,7 @@ def main(args):
         print_stacktrace_if_debug()
         error('Merging error, please check your input.\n\nERROR: %s' % e)
         sys.exit(5)
-    except CRISPRessoShared.BadParameterException as e:
+    except Exception as e:
         print_stacktrace_if_debug()
         error('Parameter error, please check your input.\n\nERROR: %s' % e)
         sys.exit(6)
